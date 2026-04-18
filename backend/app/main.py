@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.database import Base, engine
 from app.models import candidate, job, match, user  # noqa: F401 — registers models
-from app.routers import candidates, health, jobs, matches
+from app.routers import candidates, health, jobs, matches, onboarding, points
 
 
 @asynccontextmanager
@@ -33,3 +33,5 @@ app.include_router(health.router)
 app.include_router(candidates.router)
 app.include_router(jobs.router)
 app.include_router(matches.router)
+app.include_router(onboarding.router)
+app.include_router(points.router)

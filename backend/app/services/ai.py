@@ -154,6 +154,68 @@ async def parse_job(text: str) -> dict:
         return json.loads(content)
 
 
+_ONBOARDING_SYSTEM = """You are a friendly recruitment agent for matchr.
+Ask exactly one question per message to understand the candidate's preferences.
+Questions cover: work format (remote/hybrid/on-site), relocation, company type, priorities, salary expectation.
+Keep responses short — one sentence max.
+After the candidate has answered all 5 topics, respond with exactly: ONBOARDING_COMPLETE"""
+
+# Stateful mock: uses step + user's actual answer to build a contextual reply
+_MOCK_NEXT_Q = [
+    # step=1 → ack work-format answer, ask relocation
+    lambda ans: f"Got it — {ans}! Are you open to relocation if the company sponsors it?",
+    # step=2 → ack relocation, ask company type
+    lambda ans: f"Understood. What type of company interests you most — startup, corporate, or agency?",
+    # step=3 → ack company type, ask priorities
+    lambda ans: f"A {ans.lower()} environment sounds great! What matters most in your next role — growth, salary, or work-life balance?",
+    # step=4 → ack priorities, ask salary
+    lambda ans: f"Noted — {ans.lower()} is a key factor. Last one: what's your expected annual salary in USD?",
+]
+
+
+def _mock_onboarding(message: str, step: int) -> tuple[str, bool]:
+    if step == 0:
+        return "Where would you prefer to work — remote, hybrid, or on-site?", False
+    if step >= 5:
+        return "ONBOARDING_COMPLETE", True
+    idx = step - 1
+    fn = _MOCK_NEXT_Q[idx] if idx < len(_MOCK_NEXT_Q) else (lambda a: "Thanks! What's your expected annual salary in USD?")
+    return fn(message or "that"), False
+
+
+async def chat_onboarding(
+    message: str, step: int, history: list[dict]
+) -> tuple[str, bool]:
+    if not settings.DEEPSEEK_API_KEY:
+        return _mock_onboarding(message, step)
+
+    msgs: list[dict] = [{"role": "system", "content": _ONBOARDING_SYSTEM}]
+    msgs.extend(history)
+    # First call has empty message — trigger with a greeting so the model starts
+    if message:
+        msgs.append({"role": "user", "content": message})
+    elif not history:
+        msgs.append({"role": "user", "content": "Hi, I'd like to set up my profile."})
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "deepseek-chat",
+                "messages": msgs,
+                "temperature": 0.7,
+            },
+        )
+        resp.raise_for_status()
+        reply = resp.json()["choices"][0]["message"]["content"].strip()
+        complete = "ONBOARDING_COMPLETE" in reply
+        return reply, complete
+
+
 async def get_embedding(text: str) -> list[float]:
     if not settings.OPENAI_API_KEY:
         seed = abs(hash(text)) % (2**31)
