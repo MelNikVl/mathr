@@ -7,3 +7,7 @@ pgvector
 pydantic-settings
 python-dotenv
 python-multipart
+openai
+httpx
+PyPDF2
+pillow
