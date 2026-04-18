@@ -11,6 +11,7 @@ class MatchStatus(str, enum.Enum):
     pending = "pending"
     accepted = "accepted"
     rejected = "rejected"
+    invited = "invited"
 
 
 class Match(Base):

@@ -29,12 +29,20 @@ export default function RootLayout({
             >
               matchr
             </Link>
-            <Link
-              href="/dashboard"
-              className="text-sm text-slate-600 hover:text-slate-900 font-medium transition-colors"
-            >
-              Dashboard
-            </Link>
+            <div className="flex items-center gap-6">
+              <Link
+                href="/dashboard"
+                className="text-sm text-slate-600 hover:text-slate-900 font-medium transition-colors"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/recruiter"
+                className="text-sm text-slate-600 hover:text-slate-900 font-medium transition-colors"
+              >
+                For recruiters
+              </Link>
+            </div>
           </div>
         </nav>
         <main className="flex-1 flex flex-col">{children}</main>

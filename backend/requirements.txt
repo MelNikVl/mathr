@@ -11,3 +11,4 @@ openai
 httpx
 PyPDF2
 pillow
+stripe
