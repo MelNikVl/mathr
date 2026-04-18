@@ -4,10 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const MOCK_EMAIL = "test@matchr.io";
-const MOCK_SUPABASE_UID = "test-user-1";
 const TOTAL_STEPS = 5;
 
 type Role = "user" | "assistant";
@@ -24,6 +23,7 @@ export default function OnboardingPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const [candidateId, setCandidateId] = useState<number | null>(null);
+  const [accessToken, setAccessToken] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [phase, setPhase] = useState<Phase>("init");
   const [input, setInput] = useState("");
@@ -33,15 +33,37 @@ export default function OnboardingPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
 
-  // Auto-scroll on new content
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, phase, pointBadges, agentLoading]);
 
-  // On mount: create/fetch candidate, kick off first agent question
   useEffect(() => {
     (async () => {
-      // Get or create candidate
+      // Handle PKCE code exchange if redirected from OAuth callback
+      const urlCode = new URLSearchParams(window.location.search).get("code");
+      let session;
+
+      if (urlCode) {
+        const { data } = await supabase.auth.exchangeCodeForSession(urlCode);
+        session = data.session;
+        window.history.replaceState({}, "", "/onboarding");
+      } else {
+        const { data } = await supabase.auth.getSession();
+        session = data.session;
+      }
+
+      if (!session) {
+        router.push("/");
+        return;
+      }
+
+      const token = session.access_token ?? "";
+      setAccessToken(token);
+
+      const authHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) authHeaders["Authorization"] = `Bearer ${token}`;
+
+      // Create/fetch candidate record for this Supabase user
       let cid: number;
       const stored = localStorage.getItem("matchr_candidate_id");
       if (stored && !isNaN(parseInt(stored))) {
@@ -49,8 +71,11 @@ export default function OnboardingPage() {
       } else {
         const res = await fetch(`${API}/candidates/`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: MOCK_EMAIL, user_id: MOCK_SUPABASE_UID }),
+          headers: authHeaders,
+          body: JSON.stringify({
+            email: session.user.email ?? "",
+            user_id: session.user.id,
+          }),
         });
         const data = await res.json();
         cid = data.candidate_id;
@@ -58,18 +83,13 @@ export default function OnboardingPage() {
       }
       setCandidateId(cid);
 
-      // Fetch the first agent question (step=0, empty message)
+      // Fetch first agent question
       setAgentLoading(true);
       try {
         const res = await fetch(`${API}/onboarding/message`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            candidate_id: cid,
-            message: "",
-            step: 0,
-            history: [],
-          }),
+          headers: authHeaders,
+          body: JSON.stringify({ candidate_id: cid, message: "", step: 0, history: [] }),
         });
         const data = await res.json();
         setMessages([{ role: "assistant", content: data.reply }]);
@@ -81,13 +101,18 @@ export default function OnboardingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const h: Record<string, string> = { "Content-Type": "application/json", ...extra };
+    if (accessToken) h["Authorization"] = `Bearer ${accessToken}`;
+    return h;
+  }
+
   async function sendMessage(text: string) {
     const trimmed = text.trim();
     if (!trimmed || agentLoading || !candidateId) return;
     setInput("");
 
     const userMsg: Message = { role: "user", content: trimmed };
-    // history = everything visible so far (before this user turn)
     const historySnapshot = [...messages];
     const withUser: Message[] = [...historySnapshot, userMsg];
     setMessages(withUser);
@@ -99,7 +124,7 @@ export default function OnboardingPage() {
     try {
       const res = await fetch(`${API}/onboarding/message`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           candidate_id: candidateId,
           message: trimmed,
@@ -125,33 +150,30 @@ export default function OnboardingPage() {
     setUploadLoading(true);
 
     try {
-      // Upload resume
       const form = new FormData();
       form.append("candidate_id", String(candidateId));
       form.append("file", uploadFile);
-      await fetch(`${API}/candidates/resume`, { method: "POST", body: form });
 
-      // +20 pts for resume
+      const uploadHeaders: Record<string, string> = {};
+      if (accessToken) uploadHeaders["Authorization"] = `Bearer ${accessToken}`;
+
+      await fetch(`${API}/candidates/resume`, { method: "POST", headers: uploadHeaders, body: form });
+
       await fetch(`${API}/points/${candidateId}/add`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ event: "resume_uploaded" }),
       });
       setPointBadges((b) => [...b, { amount: 20, label: "resume uploaded" }]);
 
-      // small delay so user sees the +20 badge before +100
       await new Promise((r) => setTimeout(r, 600));
 
-      // +100 pts for onboarding complete
       await fetch(`${API}/points/${candidateId}/add`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ event: "onboarding_complete" }),
       });
-      setPointBadges((b) => [
-        ...b,
-        { amount: 100, label: "onboarding complete" },
-      ]);
+      setPointBadges((b) => [...b, { amount: 100, label: "onboarding complete" }]);
 
       setPhase("earning");
       setTimeout(() => router.push("/dashboard"), 2500);
@@ -167,7 +189,6 @@ export default function OnboardingPage() {
 
   return (
     <div className="flex-1 flex flex-col max-w-xl mx-auto w-full px-4 py-8">
-      {/* Progress bar */}
       <div className="mb-8 space-y-2">
         <div className="flex justify-between text-xs text-slate-500">
           <span>Profile setup</span>
@@ -176,7 +197,6 @@ export default function OnboardingPage() {
         <Progress value={progress} />
       </div>
 
-      {/* Chat thread */}
       <div className="flex-1 space-y-4 mb-6 overflow-y-auto">
         {messages.map((msg, i) =>
           msg.role === "assistant" ? (
@@ -195,7 +215,6 @@ export default function OnboardingPage() {
           )
         )}
 
-        {/* Typing indicator */}
         {agentLoading && (
           <div className="flex items-start gap-2">
             <AgentAvatar />
@@ -213,30 +232,24 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {/* Upload prompt bubble */}
         {phase === "upload" && !agentLoading && (
           <div className="flex items-start gap-2 max-w-[85%]">
             <AgentAvatar />
             <div className="bg-slate-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-800">
-              Last step — upload your resume (PDF or TXT) so I can find your
-              best matches.
+              Last step — upload your resume (PDF or TXT) so I can find your best matches.
             </div>
           </div>
         )}
 
-        {/* Points earned badges */}
         {pointBadges.map((badge, i) => (
           <div key={i} className="flex justify-center">
             <div className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-full px-4 py-1.5 text-sm font-semibold">
               <span>+{badge.amount} pts</span>
-              <span className="text-emerald-500 font-normal">
-                · {badge.label}
-              </span>
+              <span className="text-emerald-500 font-normal">· {badge.label}</span>
             </div>
           </div>
         ))}
 
-        {/* Completion bubble */}
         {phase === "earning" && (
           <div className="flex items-start gap-2 max-w-[85%]">
             <AgentAvatar />
@@ -249,7 +262,6 @@ export default function OnboardingPage() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input area */}
       {phase === "chat" && !agentLoading && (
         <div className="flex gap-2">
           <input
@@ -261,11 +273,7 @@ export default function OnboardingPage() {
             className="flex-1 h-10 px-4 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
             autoFocus
           />
-          <Button
-            onClick={() => sendMessage(input)}
-            size="sm"
-            disabled={!input.trim()}
-          >
+          <Button onClick={() => sendMessage(input)} size="sm" disabled={!input.trim()}>
             Send
           </Button>
         </div>

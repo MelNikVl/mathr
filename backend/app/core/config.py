@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     STRIPE_STARTER_PRICE_ID: str = ""
     STRIPE_PRO_PRICE_ID: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
+    SUPABASE_URL: str = ""
+    SUPABASE_JWT_SECRET: str = ""
+    ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

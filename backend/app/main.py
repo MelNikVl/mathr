@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.core.database import Base, engine
 from app.models import candidate, job, match, user  # noqa: F401 — registers models
 from app.models import recruiter  # noqa: F401 — registers Recruiter table
@@ -26,13 +27,22 @@ logger = logging.getLogger("matchr")
 async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
-            # PG 12+: ADD VALUE can run inside a transaction
             try:
                 await conn.execute(
                     text("ALTER TYPE matchstatus ADD VALUE IF NOT EXISTS 'invited'")
                 )
             except Exception:
-                pass  # enum doesn't exist yet — create_all will create it with 'invited'
+                pass
+            # Add supabase_id column if missing (idempotent)
+            await conn.execute(
+                text("ALTER TABLE users ADD COLUMN IF NOT EXISTS supabase_id VARCHAR(255)")
+            )
+            await conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_supabase_id "
+                    "ON users(supabase_id) WHERE supabase_id IS NOT NULL"
+                )
+            )
             await conn.run_sync(Base.metadata.create_all)
     except Exception as exc:
         logger.warning("DB unavailable at startup: %s", exc)
@@ -41,9 +51,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="matchr", lifespan=lifespan)
 
+origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,5 +1,3 @@
-7. Create README.md in project root with:
-
 # matchr — AI recruitment matching platform
 
 ## What it does
@@ -8,17 +6,18 @@ Recruiters post jobs in plain text → AI structures them → get ranked candida
 Points system rewards profile completion. Stripe handles recruiter subscriptions.
 
 ## Architecture
-Frontend: Next.js 14 (localhost:3000) → deployed to Vercel
+Frontend: Next.js 16 (localhost:3000) → deployed to Vercel
 Backend:  FastAPI (localhost:8000) → deployed to Railway
 Database: PostgreSQL + pgvector (Railway)
-Cache:    Redis (Railway)
+Auth:     Supabase (Google OAuth, JWT validation)
 
 ## Local stack — what runs where
-All services run LOCALLY on your machine. No external servers needed except:
-- DeepSeek API (resume/job parsing) — get key: platform.deepseek.com, free tier available
-- OpenAI API (embeddings only) — get key: platform.openai.com, ~$0.001 per resume
-- Stripe (payments) — get key: dashboard.stripe.com, test mode is free
-Everything works with mock mode if keys are missing.
+All services run LOCALLY. No external servers needed except:
+- DeepSeek API (resume/job parsing) — platform.deepseek.com, free tier available
+- OpenAI API (embeddings only) — platform.openai.com, ~$0.001 per resume
+- Stripe (payments) — dashboard.stripe.com, test mode is free
+- Supabase (auth) — supabase.com, free tier available
+Everything works in mock mode if keys are missing.
 
 ## Prerequisites
 - Ubuntu 22.04+
@@ -26,7 +25,6 @@ Everything works with mock mode if keys are missing.
 - Node.js 18+   →  sudo apt install nodejs npm  (or use nvm)
 - PostgreSQL 16 →  sudo apt install postgresql-16 postgresql-16-contrib
 - pgvector      →  sudo apt install postgresql-16-pgvector
-- Redis         →  sudo apt install redis-server
 
 ## Setup — first time only
 
@@ -47,18 +45,12 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env — fill in API keys (or leave empty for mock mode)
 nano .env
-
-# Run migrations
-alembic upgrade head
-
-# Start backend
 uvicorn app.main:app --reload --port 8000
 
 ### 4. Frontend
 cd ../frontend
 npm install
-cp .env.local.example .env.local
-# Edit if needed (default points to localhost:8000)
+cp .env.local.example .env.local  # or create from .env.production.example
 npm run dev
 
 ### 5. Verify
@@ -68,6 +60,7 @@ open http://localhost:3000         → matchr landing page
 ## Environment variables
 
 ### backend/.env
+```
 DATABASE_URL=postgresql+asyncpg://matchr:matchr@localhost:5432/matchr
 DEEPSEEK_API_KEY=        # optional — mock works without it
 OPENAI_API_KEY=          # optional — mock works without it
@@ -75,37 +68,57 @@ STRIPE_SECRET_KEY=       # optional — mock checkout without it
 STRIPE_STARTER_PRICE_ID= # create in Stripe dashboard
 STRIPE_PRO_PRICE_ID=     # create in Stripe dashboard
 SECRET_KEY=change-me-in-production
+SUPABASE_URL=            # optional — mock auth without it
+SUPABASE_JWT_SECRET=     # optional — no auth enforcement without it
+ALLOWED_ORIGINS=http://localhost:3000
+```
 
 ### frontend/.env.local
+```
 NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_SUPABASE_URL=     # optional — mock auth without it
 NEXT_PUBLIC_SUPABASE_ANON_KEY= # optional
+```
 
 ## API keys — how to get them (all have free tiers)
 
 ### DeepSeek (resume parsing)
-1. Go to platform.deepseek.com
-2. Sign up → API Keys → Create key
-3. Free credits on signup (~$5 worth, enough for hundreds of resumes)
+1. Go to platform.deepseek.com → Sign up → API Keys → Create key
+2. Free credits on signup (~$5, enough for hundreds of resumes)
 
 ### OpenAI (embeddings)
-1. Go to platform.openai.com
-2. Sign up → API keys → Create key
-3. text-embedding-3-small costs $0.02 per 1M tokens
-4. 1 resume ≈ 500 tokens = $0.00001 per resume
+1. Go to platform.openai.com → Sign up → API keys → Create key
+2. text-embedding-3-small: $0.02/1M tokens (~$0.00001 per resume)
 
 ### Stripe (payments)
-1. Go to dashboard.stripe.com
-2. Sign up → use Test Mode (no real money)
-3. Developers → API keys → copy Secret key (starts with sk_test_)
-4. Create two products: Starter $49/mo, Pro $149/mo → copy Price IDs
+1. Go to dashboard.stripe.com → Sign up → use Test Mode
+2. Developers → API keys → copy Secret key (starts with sk_test_)
+3. Create two products: Starter $49/mo, Pro $149/mo → copy Price IDs
+
+## Supabase setup (5 minutes)
+
+1. Go to supabase.com → New project
+2. Settings → API → copy:
+   - Project URL → `NEXT_PUBLIC_SUPABASE_URL` (frontend) and `SUPABASE_URL` (backend)
+   - anon/public key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - JWT Secret → `SUPABASE_JWT_SECRET` (backend only — keep secret)
+3. Authentication → Providers → Google → Enable
+   (needs Google OAuth credentials from console.cloud.google.com)
+4. Authentication → URL Configuration:
+   - Site URL: `https://your-app.vercel.app`
+   - Redirect URL: `https://your-app.vercel.app/auth/callback`
+
+## Deploy checklist
+- [ ] Supabase project created, JWT secret copied
+- [ ] Railway: new project from GitHub, Postgres plugin added
+- [ ] Railway env vars set: `DATABASE_URL`, `SECRET_KEY`, `SUPABASE_JWT_SECRET`, `ALLOWED_ORIGINS`
+- [ ] Vercel: frontend deployed, env vars set (`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SUPABASE_*`)
+- [ ] `ALLOWED_ORIGINS` set to Vercel domain in Railway (e.g. `https://matchr.vercel.app`)
+- [ ] Test: sign in with Google → onboarding → dashboard → see real matches
 
 ## Running after setup (daily)
-sudo systemctl start postgresql redis-server
+```bash
+sudo systemctl start postgresql
 cd matchr/backend && source venv/bin/activate && uvicorn app.main:app --reload &
 cd matchr/frontend && npm run dev
-
-## Deploy to production
-Frontend → push to GitHub → connect repo to vercel.com → auto-deploy
-Backend  → push to GitHub → connect repo to railway.app → add Postgres + Redis plugins
-Update frontend .env.local: NEXT_PUBLIC_API_URL=https://your-backend.railway.app
+```

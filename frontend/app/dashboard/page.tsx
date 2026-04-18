@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -11,9 +12,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const FALLBACK_CANDIDATE_ID = 2;
 
 interface JobMatch {
   job_id: number;
@@ -61,7 +62,9 @@ function eventLabel(event: string) {
 }
 
 export default function DashboardPage() {
-  const [candidateId, setCandidateId] = useState<number>(FALLBACK_CANDIDATE_ID);
+  const router = useRouter();
+  const [candidateId, setCandidateId] = useState<number | null>(null);
+  const [accessToken, setAccessToken] = useState<string>("");
   const [matches, setMatches] = useState<JobMatch[]>([]);
   const [balance, setBalance] = useState<number | null>(null);
   const [pointsHistory, setPointsHistory] = useState<PointsEvent[]>([]);
@@ -70,25 +73,62 @@ export default function DashboardPage() {
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
   const [interested, setInterested] = useState<Set<number>>(new Set());
 
-  // Resolve candidateId from localStorage on mount (client-only)
   useEffect(() => {
-    const stored = localStorage.getItem("matchr_candidate_id");
-    if (stored && !isNaN(parseInt(stored))) {
-      setCandidateId(parseInt(stored));
-    }
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+
+      if (!session) {
+        router.push("/");
+        return;
+      }
+
+      const token = session.access_token ?? "";
+      setAccessToken(token);
+
+      // Resolve candidate ID: try by-user lookup, fall back to localStorage
+      let cid: number | null = null;
+      try {
+        const res = await fetch(`${API}/candidates/by-user/${session.user.id}`);
+        if (res.ok) {
+          const d = await res.json();
+          cid = d.candidate_id;
+          localStorage.setItem("matchr_candidate_id", String(cid));
+        }
+      } catch {
+        // ignore
+      }
+
+      if (!cid) {
+        const stored = localStorage.getItem("matchr_candidate_id");
+        if (stored && !isNaN(parseInt(stored))) {
+          cid = parseInt(stored);
+        }
+      }
+
+      if (!cid) {
+        router.push("/onboarding");
+        return;
+      }
+
+      setCandidateId(cid);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch jobs + points whenever candidateId is known
   useEffect(() => {
     if (!candidateId) return;
     setLoading(true);
 
+    const headers: Record<string, string> = {};
+    if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+
     Promise.all([
-      fetch(`${API}/candidates/${candidateId}/jobs`).then((r) => {
+      fetch(`${API}/candidates/${candidateId}/jobs`, { headers }).then((r) => {
         if (!r.ok) throw new Error(`Jobs: HTTP ${r.status}`);
         return r.json();
       }),
-      fetch(`${API}/points/${candidateId}`).then((r) => {
+      fetch(`${API}/points/${candidateId}`, { headers }).then((r) => {
         if (!r.ok) throw new Error(`Points: HTTP ${r.status}`);
         return r.json();
       }),
@@ -103,9 +143,10 @@ export default function DashboardPage() {
         setError(e.message);
         setLoading(false);
       });
-  }, [candidateId]);
+  }, [candidateId, accessToken]);
 
   async function handleInterested(match: JobMatch) {
+    if (!candidateId) return;
     setInterested((prev) => new Set(prev).add(match.job_id));
     try {
       await fetch(`${API}/matches`, {
@@ -119,7 +160,7 @@ export default function DashboardPage() {
         }),
       });
     } catch {
-      // UI already updated — ignore network errors silently
+      // silent
     }
   }
 
@@ -129,9 +170,16 @@ export default function DashboardPage() {
 
   const visible = matches.filter((m) => !dismissed.has(m.job_id));
 
+  if (!candidateId && !error) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-slate-400 text-sm animate-pulse">Loading…</div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-3xl mx-auto w-full px-4 py-10 space-y-8">
-      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Your matches</h1>
@@ -140,24 +188,18 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        {/* Points card */}
         <div className="shrink-0 bg-slate-900 text-white rounded-xl px-5 py-3 text-center min-w-[88px]">
           <div className="text-2xl font-bold">
             {balance === null ? "—" : balance}
           </div>
           <div className="text-xs text-slate-400 mt-0.5">points</div>
 
-          {/* Points history */}
           {pointsHistory.length > 0 && (
             <ul className="mt-3 space-y-1 text-left border-t border-slate-700 pt-2">
               {pointsHistory.slice(0, 5).map((evt, i) => (
                 <li key={i} className="flex justify-between gap-2 text-xs">
-                  <span className="text-slate-400 truncate">
-                    {eventLabel(evt.event)}
-                  </span>
-                  <span className="text-emerald-400 font-semibold shrink-0">
-                    +{evt.amount}
-                  </span>
+                  <span className="text-slate-400 truncate">{eventLabel(evt.event)}</span>
+                  <span className="text-emerald-400 font-semibold shrink-0">+{evt.amount}</span>
                 </li>
               ))}
             </ul>
@@ -165,33 +207,26 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Loading skeletons */}
       {loading && (
         <div className="space-y-4">
           {[1, 2, 3].map((n) => (
-            <div
-              key={n}
-              className="h-44 rounded-xl bg-slate-100 animate-pulse"
-            />
+            <div key={n} className="h-44 rounded-xl bg-slate-100 animate-pulse" />
           ))}
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           Could not load data: {error}. Is the backend running on port 8000?
         </div>
       )}
 
-      {/* Empty state */}
       {!loading && !error && visible.length === 0 && (
         <div className="text-center py-20 text-slate-400">
           No more matches — check back soon!
         </div>
       )}
 
-      {/* Match cards */}
       {!loading &&
         !error &&
         visible.map((match) => {
@@ -213,10 +248,7 @@ export default function DashboardPage() {
                       {j.location && ` · ${j.location}`}
                     </CardDescription>
                   </div>
-                  <Badge
-                    variant={scoreColor(match.score)}
-                    className="shrink-0"
-                  >
+                  <Badge variant={scoreColor(match.score)} className="shrink-0">
                     {pct}% match
                   </Badge>
                 </div>
@@ -257,11 +289,7 @@ export default function DashboardPage() {
                     <Button size="sm" onClick={() => handleInterested(match)}>
                       Interested
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handlePass(match.job_id)}
-                    >
+                    <Button size="sm" variant="ghost" onClick={() => handlePass(match.job_id)}>
                       Pass
                     </Button>
                   </>

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import Link from "next/link";
+import { AuthButton } from "@/components/AuthButton";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -42,6 +43,7 @@ export default function RootLayout({
               >
                 For recruiters
               </Link>
+              <AuthButton />
             </div>
           </div>
         </nav>

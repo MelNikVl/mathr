@@ -3,8 +3,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.core.auth import get_current_user
 from app.core.database import get_db
+from app.models.candidate import Candidate
 from app.models.job import Job
+from app.models.user import User
 from app.services.job import process_job
 from app.services.matching import match_candidate_to_jobs, match_job_to_candidates
 
@@ -20,7 +23,7 @@ class JobCreate(BaseModel):
 async def create_job(body: JobCreate, db: AsyncSession = Depends(get_db)):
     job = Job(recruiter_id=body.recruiter_id, raw_text=body.raw_text)
     db.add(job)
-    await db.flush()  # get id before processing
+    await db.flush()
     job = await process_job(job.id, body.raw_text, db)
     return _serialize(job)
 
@@ -47,8 +50,25 @@ async def top_candidates_for_job(
 
 @router.get("/candidates/{candidate_id}/jobs")
 async def top_jobs_for_candidate(
-    candidate_id: int, limit: int = 10, db: AsyncSession = Depends(get_db)
+    candidate_id: int,
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict | None = Depends(get_current_user),
 ):
+    if current_user:
+        user_row = await db.execute(
+            select(User).where(User.supabase_id == current_user["user_id"])
+        )
+        user = user_row.scalar_one_or_none()
+        if user:
+            cand_row = await db.execute(
+                select(Candidate).where(
+                    Candidate.id == candidate_id, Candidate.user_id == user.id
+                )
+            )
+            if cand_row.scalar_one_or_none() is None:
+                raise HTTPException(status_code=403, detail="Forbidden")
+
     matches = await match_candidate_to_jobs(candidate_id, db, limit=limit)
     return {"candidate_id": candidate_id, "matches": matches}
 
