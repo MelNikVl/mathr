@@ -105,8 +105,12 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY= # optional
 3. Authentication → Providers → Google → Enable
    (needs Google OAuth credentials from console.cloud.google.com)
 4. Authentication → URL Configuration:
-   - Site URL: `https://your-app.vercel.app`
-   - Redirect URL: `https://your-app.vercel.app/auth/callback`
+   - **Local dev** — go to Supabase → Authentication → URL Configuration:
+     - Site URL: `http://localhost:3000`
+     - Redirect URLs: `http://localhost:3000/auth/callback`
+   - **Production** — add your Vercel domain:
+     - Site URL: `https://your-app.vercel.app`
+     - Redirect URLs: `https://your-app.vercel.app/auth/callback`
 
 ## Deploy checklist
 - [ ] Supabase project created, JWT secret copied
